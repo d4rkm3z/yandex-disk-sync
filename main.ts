@@ -1,20 +1,45 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import {
+	App,
+	ButtonComponent,
+	Editor,
+	MarkdownView,
+	Modal,
+	Notice,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	TextComponent,
+} from 'obsidian';
+import { Api, Resources } from 'src/api';
 
 // Remember to rename these classes and interfaces!
 
 interface MyPluginSettings {
-	mySetting: string;
+	authToken: string;
+	storageFolder: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+	authToken: '',
+	storageFolder: '/obsidian'
 }
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
+	api: Api;
+
+	resourcesApi: Resources;
+
+	async init() {
+		await this.loadSettings();
+
+		this.api = new Api(this.settings.authToken);
+
+		this.resourcesApi = new Resources(this.api);
+	}
 
 	async onload() {
-		await this.loadSettings();
+		await this.init();
 
 		// This creates an icon in the left ribbon.
 		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
@@ -89,20 +114,70 @@ export default class MyPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+
+	async setUp() {
+		try {
+			new Notice('Попытка создания ресурса');
+			await this.resourcesApi.createDirectory(this.settings.storageFolder);
+		} catch (err) {
+			console.log(err)
+		}
+	}
+
+	async verifyConnection() {
+		try {
+			const dirInfo = await this.resourcesApi.getResourceInfo(this.settings.storageFolder)
+			console.log('Done => ', dirInfo)
+		} catch (err) {
+			console.log(err)
+			const notice = new Notice(err.message);
+			notice.noticeEl.setCssStyles({
+				color: 'red'
+			})
+
+			if (err.code === 404) {
+				new SampleModal(this.app)
+					.setHandlers('setUp', this.setUp.bind(this))
+					.setContent(`Произошла ошибка проверки конфигурации.
+					Вероятно отсутствует указанная директория. 
+					Хотите попробовать создать?`).open();
+			}
+		}
+	}
+
+}
+
+type HandlersModal = {
+	setUp: () => void
 }
 
 class SampleModal extends Modal {
+	private handlers: HandlersModal;
+
 	constructor(app: App) {
 		super(app);
 	}
 
+	setHandlers<K extends keyof HandlersModal>(type: K, handler: HandlersModal[K]) {
+		this.handlers[type] = handler;
+
+		return this;
+	}
+
 	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
+		const { contentEl } = this;
+
+		new ButtonComponent(contentEl)
+			.setButtonText('Create')
+			.onClick(async (event) => {
+				this.handlers.setUp();
+				this.close()
+			})
+
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
@@ -116,19 +191,58 @@ class SampleSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+			.setDesc('Auth token')
+			.addText((text: TextComponent) => text
+				.setPlaceholder('Yandex cloud secret for auth application')
+				.setValue(this.plugin.settings.authToken)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.authToken = value;
 					await this.plugin.saveSettings();
-				}));
+				})
+				.inputEl.setCssStyles({
+					width: '100%',
+				})
+			)
+
+		new Setting(containerEl)
+			.setDesc('Storage folder')
+			.addText(text => text
+				.setPlaceholder('Storage location on disk')
+				.setValue(this.plugin.settings.storageFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.storageFolder = value;
+					await this.plugin.saveSettings();
+				})
+				.inputEl.setCssStyles({
+					width: '100%'
+				})
+			)
+
+
+		const div = containerEl.createDiv()
+		const btnRoot = containerEl.createSpan();
+
+		div.appendChild(containerEl.createSpan({
+			text: 'Проверка подключения и существования директории, при отсутствии директории - создаст указанную папку на яндекс диске'
+		}))
+
+
+		new ButtonComponent(btnRoot)
+			.setIcon('key-round')
+			.setButtonText('Verify connection')
+			.onClick(async (event) => {
+				await this.plugin.verifyConnection();
+			})
+
+		// .setValue('Проверка подключения и существования директории, при отсутствии директории - создаст указанную папку на яндекс диске')
+		containerEl.appendChild(div);
+		containerEl.appendChild(btnRoot);
+
+
 	}
 }
